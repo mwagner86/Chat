@@ -1,3 +1,4 @@
+## Django Chat tutorial which I will expand with more functionality for 42 Transcendence Project.
 http://127.0.0.1:8000/chat/
 
 python3 -m django --version
