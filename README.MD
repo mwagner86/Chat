@@ -30,6 +30,7 @@ deactivate
 
 
 - For this project
+
 ```python3 -m django --version```
 
 ```django-admin startproject mychat```
