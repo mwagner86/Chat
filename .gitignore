@@ -1,2 +1,3 @@
 /tutorial-env
 src/chat/__pycache__/
+src/db.sqlite3
