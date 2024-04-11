@@ -40,3 +40,5 @@ deactivate
 ```python3 -m pip install channels_redis```
 
 ```python manage.py migrate```
+
+```python3 manage.py test chat.tests```
