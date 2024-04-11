@@ -1,4 +1,6 @@
 # chat/urls.py
+''' url patters for default website '''
+
 from django.urls import path
 
 from . import views

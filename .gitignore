@@ -1,2 +1,2 @@
 /tutorial-env
-/__pycache__/*.*
+src/chat/__pycache__/
