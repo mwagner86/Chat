@@ -42,3 +42,15 @@ deactivate
 ```python manage.py migrate```
 
 ```python3 manage.py test chat.tests```
+
+
+### Creating an django admin
+
+```python manage.py create_default_admin```
+
+
+```python manage.py shell```
+
+```from django.contrib.sites.models import Site```
+
+```Site.objects.create(domain='127.0.0.1:8000', name='localhost')```
