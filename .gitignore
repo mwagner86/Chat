@@ -2,3 +2,4 @@
 src/chat/__pycache__/
 src/mychat/__pycache__
 src/db.sqlite3
+.vscode
