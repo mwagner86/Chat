@@ -31,6 +31,8 @@ deactivate
 
 - For this project
 
+```python -m pip install Django```
+
 ```python3 -m django --version```
 
 ```django-admin startproject mychat```
