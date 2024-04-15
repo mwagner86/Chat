@@ -46,7 +46,7 @@ deactivate
 
 ### Creating an django admin
 
-```python manage.py create_default_admin```
+```python manage.py createsuperuser```
 
 
 ```python manage.py shell```
