@@ -1,16 +1,23 @@
 # chat/consumers.py
+
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from datetime import datetime
-from asgiref.sync import sync_to_async  # Import sync_to_async
+from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from .models import ChatMessage, DirectMessage
+
+# A global dictionary to store the mapping of usernames to channel names
+user_channel_mapping = {}
 
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         if self.scope["user"].is_authenticated:
             self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
             self.room_group_name = "chat_%s" % self.room_name
+
+            # Store the user's channel name
+            user_channel_mapping[self.scope["user"].username] = self.channel_name
 
             # Join room group
             await self.channel_layer.group_add(self.room_group_name, self.channel_name)
@@ -25,6 +32,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.close()
 
     async def disconnect(self, close_code):
+        # Remove the user's channel name from the mapping
+        if self.scope["user"].username in user_channel_mapping:
+            del user_channel_mapping[self.scope["user"].username]
+
         # Leave room group
         await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
 
@@ -42,25 +53,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.save_message_to_database(message)
             await self.send_to_room(message)
 
-        # Debug: Print recipient's channel name and received message
-        print(f"Recipient channel name: user_{recipient_username}")
-        print(f"Received message: {message}")
-
-
     async def send_direct_message_to_recipient(self, message, recipient_username):
-        recipient_channel_name = f"user_{recipient_username}"
-        print("Recipient channel name:", recipient_channel_name)
+        # Retrieve the recipient's channel name from the mapping
+        recipient_channel_name = user_channel_mapping.get(recipient_username)
+        if recipient_channel_name:
+            print("Recipient channel name:", recipient_channel_name)
 
-        await self.channel_layer.send(
-            recipient_channel_name,
-            {
-                "type": "chat.message",
-                "message": message,
-                "username": self.scope["user"].username,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "direct": True,  # Indicate that it's a direct message
-            }
-        )
+            await self.channel_layer.send(
+                recipient_channel_name,
+                {
+                    "type": "chat_message",
+                    "message": message,
+                    "username": self.scope["user"].username,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "direct": True,  # Indicate that it's a direct message
+                }
+            )
 
     async def save_message_to_database(self, message):
         user = self.scope["user"]
@@ -107,17 +115,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         is_direct = event.get("direct", False)
 
         if is_direct:
-            # Check if the message is directed to the current user
-            if username == self.scope["user"].username:
-                # Send direct message to WebSocket
-                await self.send(text_data=json.dumps({
-                    "message": message,
-                    "username": username,
-                    "timestamp": timestamp,
-                    "direct": True,
-                }))
+            # Send direct message to WebSocket
+            await self.send(text_data=json.dumps({
+                "message": message,
+                "username": username,
+                "timestamp": timestamp,
+                "direct": True,
+            }))
         else:
-            # Send message to WebSocket (for messages not directed to the current user)
+            # Send message to WebSocket
             await self.send(text_data=json.dumps({
                 "message": message,
                 "username": username,
