@@ -1,149 +1,126 @@
 # chat/consumers.py
-
-'''code for the asynchronous chat application'''
 import json
-import logging
-
-from datetime import datetime
 from channels.generic.websocket import AsyncWebsocketConsumer
+from datetime import datetime
+from asgiref.sync import sync_to_async  # Import sync_to_async
+from django.contrib.auth import get_user_model
+from .models import ChatMessage, DirectMessage
 
 class ChatConsumer(AsyncWebsocketConsumer):
-    """
-A class representing a consumer for the asynchronous chat application.
-
-Attributes:
-    DATE_FORMAT (str): The format of the date and time used in the chat messages.
-
-Methods:
-    __init__(*args, **kwargs): Initializes the ChatConsumer instance.
-    connect(): Handles the connection of a user to a chat room.
-    username(): Returns the username
-    """
-
-    DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.room_group_name = None
-        self.room_name = "default_room"
-        self.logger = logging.getLogger(__name__)
-
-    @property
-    def username(self):
-        """
-        Returns:
-            str: The username of the user or 'Anonymous User' if the user is not authenticated.
-        """
-        user = self.scope['user']
-        return user.username if user.is_authenticated else 'Anonymous User'
-
     async def connect(self):
-        """
-        Handles the connection of a user to a chat room in the asynchronous chat application.
-        """
-        user = self.scope["user"]
-        if user.is_authenticated:
-            try:
-                self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
-                self.room_group_name = f"chat_{self.room_name}"
+        if self.scope["user"].is_authenticated:
+            self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
+            self.room_group_name = "chat_%s" % self.room_name
 
-                # Join room group
-                await self.channel_layer.group_add(self.room_group_name, self.channel_name)
-
-                await self.accept()
-                # Send message to room group
-                await self.send_join_message(
-                    self.username,
-                    datetime.now().strftime(self.DATE_FORMAT)
-                    )
-            except ConnectionError as e:
-                self.logger.error("Failed to connect: %s", str(e))
-                await self.close()
-        else:
-            # Handle unauthenticated user
-            self.room_name = "unauthorized"
-            self.room_group_name = f"chat_{self.room_name}"
-
-            # Join unauthorized room group
+            # Join room group
             await self.channel_layer.group_add(self.room_group_name, self.channel_name)
 
             await self.accept()
-            # Use the username property to get "Anonymous User"
-            join_message = f"{self.username} has joined the unauthorized room: Please login to participate in the full chat experience."
-            await self.channel_layer.group_send(
-                self.room_group_name,
-                {
-                    "type": "chat_message",
-                    "message": join_message,
-                }
-            )
+
+            # Print the connection attempt
+            print(f"User {self.scope['user'].username} connected to room {self.room_name}")
+        else:
+            # Print the unauthorized connection attempt
+            print("Unauthorized connection attempt")
+            await self.close()
+
+    async def disconnect(self, close_code):
+        # Leave room group
+        await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+
+    async def receive(self, text_data):
+        text_data_json = json.loads(text_data)
+        message = text_data_json["message"]
+        recipient_username = text_data_json.get("recipient")
+
+        if recipient_username and recipient_username != self.scope["user"].username:  
+            # Direct message to another user
+            await self.save_direct_message_to_database(message, recipient_username)
+            await self.send_direct_message_to_recipient(message, recipient_username)
+        else:  
+            # Message to room or message to self (not a direct message)
+            await self.save_message_to_database(message)
+            await self.send_to_room(message)
+
+        # Debug: Print recipient's channel name and received message
+        print(f"Recipient channel name: user_{recipient_username}")
+        print(f"Received message: {message}")
 
 
-    async def disconnect(self, code):
-        """
-        Handles the disconnection of a user from a chat room.
-        """
-        if self.room_group_name:
-            user = self.username
-            leave_message = f"{user} has left the chat."
-            await self.send_leave_message(leave_message)
-            await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+    async def send_direct_message_to_recipient(self, message, recipient_username):
+        recipient_channel_name = f"user_{recipient_username}"
+        print("Recipient channel name:", recipient_channel_name)
 
-    async def receive(self, text_data=None, bytes_data=None):
-        try:
-            text_data_json = json.loads(text_data)
-            message = text_data_json["message"]
-            user = self.username  # Use the username property instead of scope["user"].username
-            timestamp = datetime.now().strftime(self.DATE_FORMAT)
-            formatted_message = f"{user} at {timestamp}: {message}"
-            await self.send_chat_message(formatted_message)
-        except json.JSONDecodeError as e:
-            self.logger.error("Failed to decode JSON: %s", str(e))
-            # Send an error message back to the user
-            await self.send(text_data=json.dumps({
-                'error': 'Invalid message format. Please send a valid JSON.'
-            }))
+        await self.channel_layer.send(
+            recipient_channel_name,
+            {
+                "type": "chat.message",
+                "message": message,
+                "username": self.scope["user"].username,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "direct": True,  # Indicate that it's a direct message
+            }
+        )
+
+    async def save_message_to_database(self, message):
+        user = self.scope["user"]
+        room_name = self.room_name
+        timestamp = datetime.now()
+
+        # Use sync_to_async to save the message asynchronously
+        await sync_to_async(ChatMessage.objects.create)(
+            user=user, room_name=room_name, message=message, timestamp=timestamp
+        )
+
+    async def save_direct_message_to_database(self, message, recipient_username):
+        sender = self.scope["user"]
+        recipient = await sync_to_async(get_user_model().objects.get)(username=recipient_username)
+
+        await sync_to_async(DirectMessage.objects.create)(
+            sender=sender, recipient=recipient, message=message
+        )
+
+        # Send acknowledgment to sender
+        await self.send(text_data=json.dumps({
+            "message": "Direct message sent successfully",
+            "username": "System",
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }))
+
+    async def send_to_room(self, message):
+        # Send message to room group
+        await self.channel_layer.group_send(
+            self.room_group_name,
+            {
+                "type": "chat_message",
+                "message": message,
+                "username": self.scope["user"].username,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "direct": False,  # Indicate that it's not a direct message
+            }
+        )
 
     async def chat_message(self, event):
-        """
-        Receives a message from the room group.
-        """
         message = event["message"]
-        await self.send(text_data=json.dumps({"message": message}))
+        username = event["username"]
+        timestamp = event["timestamp"]
+        is_direct = event.get("direct", False)
 
-    async def send_join_message(self, username, timestamp):
-        """
-        Sends a join message to the room group.
-        Parameters:
-        username (str): The username of the user who joined the chat.
-        timestamp (str): The timestamp when the user joined the chat.
-
-        Raises:
-        Exception: If there is an error while sending the join message.
-        """
-        try:
-            join_message = f"{username} has joined the chat at {timestamp}."
-            await self.channel_layer.group_send(
-                self.room_group_name,
-                {
-                    "type": "chat_message",
-                    "message": join_message,
-                }
-            )
-        except Exception as e:
-            self.logger.error("Failed to send join message: %s", str(e))
-
-    async def send_leave_message(self, message):
-        """
-        Sends a leave message to the room group.
-        """
-        await self.channel_layer.group_send(
-            self.room_group_name, {"type": "chat_message", "message": message}
-        )
-
-    async def send_chat_message(self, message):
-        """
-        Sends a chat message to the room group.
-        """
-        await self.channel_layer.group_send(
-            self.room_group_name, {"type": "chat_message", "message": message}
-        )
+        if is_direct:
+            # Check if the message is directed to the current user
+            if username == self.scope["user"].username:
+                # Send direct message to WebSocket
+                await self.send(text_data=json.dumps({
+                    "message": message,
+                    "username": username,
+                    "timestamp": timestamp,
+                    "direct": True,
+                }))
+        else:
+            # Send message to WebSocket (for messages not directed to the current user)
+            await self.send(text_data=json.dumps({
+                "message": message,
+                "username": username,
+                "timestamp": timestamp,
+                "direct": False,
+            }))
